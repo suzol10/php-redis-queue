@@ -111,7 +111,7 @@ class QueueWorker
       $context = null;
 
       try {
-        $context = call_user_func($this->callbacks[$jobName], $job->get('jobData'));
+        $context = call_user_func($this->callbacks[$jobName], $job);
       } catch (\Throwable $e) {
         $status = 'failed';
         $context = $this->getExceptionData($e);
