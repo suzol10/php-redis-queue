@@ -42,6 +42,8 @@ class QueueManager extends BaseManager
           'count' => 0,
           'pending' => 0,
           'processed' => 0,
+          'successful' => 0,
+          'failed' => 0,
         ];
       }
 
@@ -75,10 +77,12 @@ class QueueManager extends BaseManager
             'count' => 0,
             'pending' => 0,
             'processed' => 0,
+            'successful' => 0,
+            'failed' => 0,
           ];
         }
 
-        $queues[$queueName][$which] = $this->redis->llen($keyName);
+        $queues[$queueName] = array_merge($queues[$queueName], $this->getQueueStats($queueName));
       }
     }
 
@@ -93,6 +97,22 @@ class QueueManager extends BaseManager
   public function getQueue(string $name)
   {
     return (new Queue($this->redis, $name));
+  }
+
+  /**
+   * Get detailed statistics for a specific queue
+   * @param string $name Queue name
+   * @return array
+   */
+  public function getQueueStats(string $name): array
+  {
+    $queue = $this->getQueue($name);
+    $stats = $queue->getStats();
+
+    // Add queue name to the stats
+    $stats['name'] = $name;
+
+    return $stats;
   }
 
   public function registerQueue(Queue $queue)
