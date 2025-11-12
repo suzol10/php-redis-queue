@@ -28,6 +28,19 @@ class Queue
    */
   public string $processed;
 
+
+  /**
+   * Name of varible that keeps track of how many jobs have processed successfully in this queue
+   * @var string
+   */
+  public string $successful;
+
+  /**
+   * Name of varible that keeps track of how many jobs have processed failed in this queue
+   * @var string
+   */
+  public string $failed;
+
   public function __construct(protected \Predis\Client $redis, string $name)
   {
     $this->name = str_replace(':', '-', $name);
@@ -37,6 +50,8 @@ class Queue
     $this->pending = $base . ':pending';
     $this->processing = $base . ':processing';
     $this->processed = $base . ':processed';
+    $this->successful = $base . ':successful';
+    $this->failed = $base . ':failed';
   }
 
   public function getJobs(string $which, int $limit = 50)
@@ -79,6 +94,25 @@ class Queue
   public function onJobCompletion(Job $job)
   {
     $this->removeFromProcessing($job);
+
+    $status = $job->get('status');
+    if ($status === 'success') {
+        $this->redis->incr($this->successful);
+    } elseif ($status === 'failed') {
+        $this->redis->incr($this->failed);
+    }
+
     return $this->redis->lpush($this->processed, $job->id());
+  }
+
+  public function getStats(): array
+  {
+      return [
+          'pending' => $this->redis->llen($this->pending),
+          'processing' => $this->redis->llen($this->processing),
+          'processed' => $this->redis->llen($this->processed),
+          'successful' => (int) $this->redis->get($this->successful) ?: 0,
+          'failed' => (int) $this->redis->get($this->failed) ?: 0,
+      ];
   }
 }
