@@ -66,8 +66,9 @@ class JobManager extends BaseManager
     $removedFromPending = $this->redis->lrem($queue->pending, -1, $job->id());
     $removedFromProcessing = $this->redis->lrem($queue->processing, -1, $job->id());
     $removedFromProcessed = $this->redis->lrem($queue->processed, -1, $job->id());
-
-    return $removedFromPending === 1 || $removedFromProcessing === 1 || $removedFromProcessed === 1;
+    $removedFromFailed = $this->redis->lrem($queue->failed, -1, $job->id());
+    
+    return $removedFromPending === 1 || $removedFromProcessing === 1 || $removedFromProcessed === 1 || $removedFromFailed === 1;
   }
 
   /**

@@ -59,7 +59,7 @@ class QueueManager extends BaseManager
 
   protected function addJobsFromQueue(array $queues)
   {
-    foreach (['pending', 'processed'] as $which) {
+    foreach (['pending', 'processed', 'failed'] as $which) {
 
       $foundQueues = $this->redis->keys("php-redis-queue:client:*:$which");
 
@@ -157,11 +157,11 @@ class QueueManager extends BaseManager
   protected function migrateQueues()
   {
     // Find all queue keys that might have the old failed counter format
-    $queueKeys = $this->redis->keys('php-redis-queue:client:*:failed');
+    $queueKeys = $this->redis->keys('php-redis-queue:client:*:processed');
 
-    foreach ($queueKeys as $failedKey) {
-      // Extract queue name from key: php-redis-queue:client:{queue_name}:failed
-      if (preg_match('/php-redis-queue:client:([^:]+):failed/', $failedKey, $matches)) {
+    foreach ($queueKeys as $processedKey) {
+      // Extract queue name from key: php-redis-queue:client:{queue_name}:processed
+      if (preg_match('/php-redis-queue:client:([^:]+):processed/', $processedKey, $matches)) {
         $queueName = $matches[1];
         $queue = $this->getQueue($queueName);
 
@@ -172,13 +172,14 @@ class QueueManager extends BaseManager
           // This is an old counter format, convert to list
           // Since we don't have the actual job IDs, we'll initialize as empty list
           // and set successful counter if it doesn't exist
-          $this->redis->del($queue->failed); // Remove the old counter
-
-          // Ensure successful counter exists
-          if (!$this->redis->exists($queue->successful)) {
-            $this->redis->set($queue->successful, 0);
-          }
+          $this->redis->del($queue->failed); // Remove the old counter failed counter
         }
+        
+        // Ensure successful counter exists
+        if (!$this->redis->exists($queue->successful)) {
+          $this->redis->set($queue->successful, 0);
+        }
+        
       }
     }
   }
