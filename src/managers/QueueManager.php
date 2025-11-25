@@ -166,7 +166,11 @@ class QueueManager extends BaseManager
         $queue = $this->getQueue($queueName);
 
         // Check if failed key contains a counter (string/int) instead of a list
-        $failedValue = $this->redis->get($queue->failed);
+        try {
+          $failedValue = $this->redis->get($queue->failed) ?: 0;
+        } catch (\Exception $e) {
+          $failedValue = null;
+        }
 
         if ($failedValue !== null && is_numeric($failedValue)) {
           // This is an old counter format, convert to list

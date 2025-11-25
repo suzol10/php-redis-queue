@@ -142,15 +142,15 @@ class QueueWorker
 
   protected function onJobCompletion(Job $job, string $status, $context = null)
   {
-    $this->queue->onJobCompletion($job);
-
     $job->withData('status', $status);
-
+    
     if ($context) {
       $job->withData('context', $context);
     }
-
+    
     $job->save();
+   
+    $this->queue->onJobCompletion($job);
 
     $this->hook($job->get('jobName') . '_after', $job->get(), $status === 'success');
 
