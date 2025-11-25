@@ -30,6 +30,7 @@ class QueueManager extends BaseManager
   public function getList()
   {
     $this->verifyQueues();
+    $this->migrateQueues();
 
     // active queues (with or without pending jobs)
     $queues = [];
@@ -146,6 +147,39 @@ class QueueManager extends BaseManager
     // if there are inactives, remove them
     if (!empty($inactive)) {
       $this->redis->hdel($this->allQueues, $inactive);
+    }
+  }
+
+  /**
+   * Migrate existing queues to use the new failed jobs list format
+   * @return void
+   */
+  protected function migrateQueues()
+  {
+    // Find all queue keys that might have the old failed counter format
+    $queueKeys = $this->redis->keys('php-redis-queue:client:*:failed');
+
+    foreach ($queueKeys as $failedKey) {
+      // Extract queue name from key: php-redis-queue:client:{queue_name}:failed
+      if (preg_match('/php-redis-queue:client:([^:]+):failed/', $failedKey, $matches)) {
+        $queueName = $matches[1];
+        $queue = $this->getQueue($queueName);
+
+        // Check if failed key contains a counter (string/int) instead of a list
+        $failedValue = $this->redis->get($queue->failed);
+
+        if ($failedValue !== null && is_numeric($failedValue)) {
+          // This is an old counter format, convert to list
+          // Since we don't have the actual job IDs, we'll initialize as empty list
+          // and set successful counter if it doesn't exist
+          $this->redis->del($queue->failed); // Remove the old counter
+
+          // Ensure successful counter exists
+          if (!$this->redis->exists($queue->successful)) {
+            $this->redis->set($queue->successful, 0);
+          }
+        }
+      }
     }
   }
 }

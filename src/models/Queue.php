@@ -36,7 +36,7 @@ class Queue
   public string $successful;
 
   /**
-   * Name of varible that keeps track of how many jobs have processed failed in this queue
+   * Name of list that keeps track of failed jobs in this queue
    * @var string
    */
   public string $failed;
@@ -99,7 +99,7 @@ class Queue
     if ($status === 'success') {
         $this->redis->incr($this->successful);
     } elseif ($status === 'failed') {
-        $this->redis->incr($this->failed);
+        $this->redis->lpush($this->failed, $job->id());
     }
 
     return $this->redis->lpush($this->processed, $job->id());
@@ -112,7 +112,17 @@ class Queue
           'processing' => $this->redis->llen($this->processing),
           'processed' => $this->redis->llen($this->processed),
           'successful' => (int) $this->redis->get($this->successful) ?: 0,
-          'failed' => (int) $this->redis->get($this->failed) ?: 0,
+          'failed' => $this->redis->llen($this->failed),
       ];
+  }
+
+  /**
+   * Get failed job IDs from the queue
+   * @param int $limit Maximum number of failed jobs to return
+   * @return array Array of failed job IDs
+   */
+  public function getFailedJobs(int $limit = 50): array
+  {
+    return $this->redis->lrange($this->failed, 0, $limit - 1);
   }
 }
