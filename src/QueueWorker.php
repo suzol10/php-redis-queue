@@ -76,10 +76,6 @@ class QueueWorker
       ini_set('default_socket_timeout', $this->config['default_socket_timeout']);
     }
 
-    while ($id = $this->redis->rpop($this->queue->processing)) {
-      $this->redis->lpush($this->queue->pending, $id);
-    }
-
     while($id = $this->queue->check($block)) {
 
       $id = is_array($id) ?

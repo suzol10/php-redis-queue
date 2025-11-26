@@ -187,4 +187,41 @@ class QueueManager extends BaseManager
       }
     }
   }
+
+  /**
+   * Recover jobs that are stuck in processing queues from crashed workers.
+   * This should only be called once during worker system initialization.
+   * @return void
+   */
+  public function recoverCrashedJobs(): void
+  {
+    // Get all queues with their stats
+    $queues = $this->getList();
+
+    foreach ($queues as $queueName => $queueStats) {
+      // Only process queues that have jobs stuck in processing
+      if ($queueStats['processing'] > 0) {
+        $queue = $this->getQueue($queueName);
+
+        // Move all jobs from processing back to pending
+        while ($jobId = $this->redis->rpop($queue->processing)) {
+          $this->redis->lpush($queue->pending, $jobId);
+
+          try {
+            // Update job status back to pending
+            $job = new \PhpRedisQueue\models\Job($this->redis, (int) $jobId);
+            if ($job->get() !== null) {
+              $job->withData('status', 'pending')->save();
+            } else {
+              // Job data doesn't exist, skip it
+              $this->log('warning', 'Skipping recovery of job ' . $jobId . ': job data not found');
+            }
+          } catch (\Exception $e) {
+            // Skip jobs that can't be loaded or updated
+            $this->log('warning', 'Failed to recover job ' . $jobId . ': ' . $e->getMessage());
+          }
+        }
+      }
+    }
+  }
 }
