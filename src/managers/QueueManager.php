@@ -6,12 +6,32 @@ use PhpRedisQueue\models\Queue;
 
 class QueueManager extends BaseManager
 {
+  const GLOBAL_WORKERS_LIMIT_KEY = 'php-redis-queue:global:workers_limit';
+  const DEFAULT_GLOBAL_WORKERS_LIMIT = 10;
   /**
    * Redis key that holds the hash that keeps track
    * of active queues.
    * @var string
    */
   protected string $allQueues = 'php-redis-queue:queues';
+
+  public function __construct(\Predis\Client $redis)
+  {
+    parent::__construct($redis);
+    if (!$this->redis->exists(self::GLOBAL_WORKERS_LIMIT_KEY) ) {
+      $this->setGlobalWorkersLimit(self::DEFAULT_GLOBAL_WORKERS_LIMIT);
+    }
+  }
+
+  public function setGlobalWorkersLimit(int $globalWorkersLimit)
+  {
+    $this->redis->set(self::GLOBAL_WORKERS_LIMIT_KEY, $globalWorkersLimit);
+  }
+
+  public function getGlobalWorkersLimit(): ?int
+  {
+    return $this->redis->exists(self::GLOBAL_WORKERS_LIMIT_KEY) ? (int) $this->redis->get(self::GLOBAL_WORKERS_LIMIT_KEY) : null;
+  }
 
   /**
    * Get queues with an active worker
@@ -20,6 +40,21 @@ class QueueManager extends BaseManager
   public function getActiveQueues()
   {
     return $this->redis->hgetall($this->allQueues);
+  }
+
+  /**
+   * Get total active workers across all queues
+   * @return int
+   */
+  public function getTotalActiveWorkers(): int
+  {
+    $stats = $this->getList();
+    $totalActiveWorkers = 0;
+    foreach ($stats as $queueName => $queueStats) {
+      $totalActiveWorkers += $queueStats['count'] ?? 0;
+    }
+
+    return $totalActiveWorkers;
   }
 
   /**

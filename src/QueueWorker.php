@@ -65,6 +65,31 @@ class QueueWorker
     $this->queueManager->registerQueue($this->queue);
   }
 
+  /**
+   * Check if this worker should exit based on scaling conditions
+   * @return bool True if worker should exit
+   */
+  public function shouldWorkerExit(): bool
+  {
+    $stats = $this->queueManager->getList();
+    $queueStats = $stats[$this->queue->name];
+
+    // Check queue-specific max workers limit
+    $maxWorkers = $this->queue->getConfigDataValue('max_workers');
+    if ($queueStats['count'] > $maxWorkers) {
+      return true;
+    }
+
+    // Check global max workers limit
+    $globalMaxWorkers = $this->queueManager->getGlobalWorkersLimit();
+    $totalActiveWorkers = $this->queueManager->getTotalActiveWorkers();
+    if ($totalActiveWorkers > $globalMaxWorkers) {
+      return true;
+    }
+
+    return false;
+  }
+
    /**
     * Undocumented function
     * @param boolean $block
@@ -74,6 +99,11 @@ class QueueWorker
   {
     if ($block && $this->config['default_socket_timeout'] !== null) {
       ini_set('default_socket_timeout', $this->config['default_socket_timeout']);
+    }
+
+    // Check if worker should exit based on scaling conditions
+    if ($this->shouldWorkerExit()) {
+      return;
     }
 
     while($id = $this->queue->check($block)) {
@@ -117,6 +147,11 @@ class QueueWorker
 
       // for testing -- only one job runs at a time
       // die();
+
+      // Check if worker should exit based on scaling conditions
+      if ($this->shouldWorkerExit()) {
+        break;
+      }
 
       sleep($this->config['wait']);
     }
@@ -176,8 +211,8 @@ class QueueWorker
   protected function expireModel($model, $success)
   {
     $ttl = $success ?
-      60 * 60 * 24 :
-      60 * 60 * 24 * 7;
+      60 * 60 * 24 : // 1 day
+      60 * 60 * 24 * 7; // 7 days
 
     return $model->expire($ttl);
   }

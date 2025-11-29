@@ -113,6 +113,10 @@ class Queue
           'processed' => $this->redis->llen($this->processed),
           'successful' => (int) $this->redis->get($this->successful) ?: 0,
           'failed' => $this->redis->llen($this->failed),
+          'config' => [
+              'max_workers' => $this->getConfigDataValue('max_workers') ?: 1,
+              'pending_threshold' => $this->getConfigDataValue('pending_threshold') ?: 5,
+          ],
       ];
   }
 
@@ -124,5 +128,39 @@ class Queue
   public function getFailedJobs(int $limit = 50): array
   {
     return $this->redis->lrange($this->failed, 0, $limit - 1);
+  }
+
+  /**
+   * Get configuration data value for this queue
+   * @param string $key Configuration key
+   * @return mixed Configuration value or null if not set
+   */
+  public function getConfigDataValue(string $key)
+  {
+    $configKey = $this->getConfigDataKey($key);
+    return $this->redis->get($configKey);
+  }
+
+  /**
+   * Set configuration data value for this queue
+   * @param string $key Configuration key
+   * @param mixed $value Configuration value
+   * @return bool True on success
+   */
+  public function setConfigDataValue(string $key, $value): bool
+  {
+    $configKey = $this->getConfigDataKey($key);
+    $status = (string) $this->redis->set($configKey, $value);
+    return $status === 'OK' || $status === 'QUEUED';
+  }
+
+  /**
+   * Get the Redis key for configuration data
+   * @param string $key Configuration key
+   * @return string Redis key for the config data
+   */
+  private function getConfigDataKey(string $key): string
+  {
+    return 'php-redis-queue:client:' . $this->name . ':config:' . $key;
   }
 }
