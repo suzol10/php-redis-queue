@@ -28,6 +28,7 @@ class Job extends BaseModel
     // add latest run to the front of the array
     $rerunData = $this->data;
     unset($rerunData['runs']);
+    unset($rerunData['jobData']['contents']); // remove contents from the job data from the rerun data
     array_unshift($this->data['runs'], $rerunData);
 
     // update datetime

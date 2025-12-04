@@ -98,11 +98,12 @@ class Queue
     $status = $job->get('status');
     if ($status === 'success') {
         $this->redis->incr($this->successful);
+        $this->redis->lpush($this->processed, $job->id());
     } elseif ($status === 'failed') {
         $this->redis->lpush($this->failed, $job->id());
     }
 
-    return $this->redis->lpush($this->processed, $job->id());
+    return true;
   }
 
   public function getStats(): array

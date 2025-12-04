@@ -106,6 +106,7 @@ class QueueWorker
       return;
     }
 
+    $failedJobsCount = 0;
     while($id = $this->queue->check($block)) {
 
       $id = is_array($id) ?
@@ -141,6 +142,7 @@ class QueueWorker
       } catch (\Throwable $e) {
         $status = 'failed';
         $context = $this->getExceptionData($e);
+        $failedJobsCount++;
       }
 
       $this->onJobCompletion($job, $status, $context);
@@ -149,7 +151,10 @@ class QueueWorker
       // die();
 
       // Check if worker should exit based on scaling conditions
-      if ($this->shouldWorkerExit()) {
+      if (
+        $failedJobsCount >= 5
+        || $this->shouldWorkerExit()
+      ) {
         break;
       }
 
@@ -200,9 +205,13 @@ class QueueWorker
     $this->expireModel($job, $status === 'success');
 
     if ($status !== 'success') {
+
+      $jobWithRemovedContents = $job->get();
+      unset($jobWithRemovedContents['jobData']['contents']); // remove contents from the job data from the log
+
       $this->log('warning', $job->get('jobName') . ' job failed', [
         'context' => [
-          'job' => $job->get(),
+          'job' => $jobWithRemovedContents,
         ]
       ]);
     }
