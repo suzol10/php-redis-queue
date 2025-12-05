@@ -2,7 +2,9 @@
 
 namespace PhpRedisQueue\managers;
 
+use Doctrine\DBAL\Driver\Mysqli\Exception\FailedReadingStreamOffset;
 use PhpRedisQueue\models\Queue;
+use PHPUnit\TextUI\XmlConfiguration\MigrationBuilderException;
 
 class QueueManager extends BaseManager
 {
@@ -65,7 +67,6 @@ class QueueManager extends BaseManager
   public function getList()
   {
     $this->verifyQueues();
-    $this->migrateQueues();
 
     // active queues (with or without pending jobs)
     $queues = [];
@@ -94,7 +95,7 @@ class QueueManager extends BaseManager
 
   protected function addJobsFromQueue(array $queues)
   {
-    foreach (['pending', 'processed', 'failed'] as $which) {
+    foreach (['pending', 'successful', 'failed'] as $which) {
 
       $foundQueues = $this->redis->keys("php-redis-queue:client:*:$which");
 
@@ -143,6 +144,7 @@ class QueueManager extends BaseManager
   public function getQueueStats(string $name): array
   {
     $queue = $this->getQueue($name);
+    /** @var \PhpRedisQueue\models\Queue $queue */
     $stats = $queue->getStats();
 
     // Add queue name to the stats
@@ -189,38 +191,43 @@ class QueueManager extends BaseManager
    * Migrate existing queues to use the new failed jobs list format
    * @return void
    */
-  protected function migrateQueues()
+  public function migrateQueues()
   {
-    // Find all queue keys that might have the old failed counter format
-    $queueKeys = $this->redis->keys('php-redis-queue:client:*:processed');
+    // NOTE: processed was a list, we want to rename it to successful, and successful to processed. this will make successful a list and processed a number.
+    // NOTE: since this is a migration, we need to make sure we only run it when necessary.
+    // NOTE: we can't use internal functions because they are already on the new format. we need to use redis commands directly.
+    // steps:
+    // 1. get all queue keys that have processed key and check if successful key is not a list and processed key is a list
+    // 2. if so, rename processed to successful_temp
+    // 3. rename successful to processed
+    // 4. rename successful_temp to successful
 
-    foreach ($queueKeys as $processedKey) {
-      // Extract queue name from key: php-redis-queue:client:{queue_name}:processed
-      if (preg_match('/php-redis-queue:client:([^:]+):processed/', $processedKey, $matches)) {
-        $queueName = $matches[1];
-        $queue = $this->getQueue($queueName);
+    $processedKeys = $this->redis->keys('php-redis-queue:client:*:processed');
 
-        // Check if failed key contains a counter (string/int) instead of a list
-        try {
-          $failedValue = $this->redis->get($queue->failed) ?: 0;
-        } catch (\Exception $e) {
-          $failedValue = null;
+    $migratedCount = 0;
+    foreach ($processedKeys as $processedKey) {
+      preg_match("/php-redis-queue:client:([^:]+):processed/", $processedKey, $match);
+      if (!isset($match[1])) {
+        continue;
+      }
+      $queueName = $match[1];
+      $queue = $this->getQueue($queueName);
+      /** @var \PhpRedisQueue\models\Queue $queue */
+      if ($this->redis->exists($queue->successful) && $this->redis->exists($queue->processed)) {
+        // check if processed key is a list and successful key is a counter
+        if ($this->redis->type($queue->successful) == 'list') {
+          // already migrated
+          continue;
         }
 
-        if ($failedValue !== null && is_numeric($failedValue)) {
-          // This is an old counter format, convert to list
-          // Since we don't have the actual job IDs, we'll initialize as empty list
-          // and set successful counter if it doesn't exist
-          $this->redis->del($queue->failed); // Remove the old counter failed counter
-        }
-        
-        // Ensure successful counter exists
-        if (!$this->redis->exists($queue->successful)) {
-          $this->redis->set($queue->successful, 0);
-        }
-        
+        $this->redis->rename($queue->processed, $queue->successful . '_temp');
+        $this->redis->rename($queue->successful, $queue->processed);
+        $this->redis->rename($queue->successful . '_temp', $queue->successful);
+        $migratedCount++;
       }
     }
+
+    return $migratedCount;
   }
 
   /**
@@ -241,13 +248,12 @@ class QueueManager extends BaseManager
 
         // Move all jobs from processing back to pending
         while ($jobId = $this->redis->rpop($queue->processing)) {
-          $this->redis->lpush($queue->pending, $jobId);
-
           try {
             // Update job status back to pending
             $job = new \PhpRedisQueue\models\Job($this->redis, (int) $jobId);
             if ($job->get() !== null) {
               $job->withData('status', 'pending')->save();
+              $this->redis->lpush($queue->pending, $jobId);
               $recoveredCount++;
             } else {
               // Job data doesn't exist, skip it
@@ -258,6 +264,37 @@ class QueueManager extends BaseManager
             $this->log('warning', 'Failed to recover job ' . $jobId . ': ' . $e->getMessage());
           }
         }
+      }
+    }
+
+    return $recoveredCount;
+  }
+
+  public function fixIncorrectFailedJobsStatus(): int
+  {
+    // Get all queues with their stats
+    $queues = $this->getList();
+    $recoveredCount = 0;
+
+    foreach ($queues as $queueName => $queueStats) {
+      // Only process queues that have jobs stuck in processing
+      if ($queueStats['failed'] > 0) {
+        /** @var \PhpRedisQueue\models\Queue $queue */
+        $queue = $this->getQueue($queueName);
+
+          // get default number of jobs to fix
+          $failedJobs = $queue->getJobs('failed' , -1);
+          foreach ($failedJobs as $jobStdObj) {
+
+            /** @var \PhpRedisQueue\models\Job $Job */
+            $job = new \PhpRedisQueue\models\Job($this->redis, (int) $jobStdObj->id);
+
+            // if job is not in failed status, update it to failed
+            if ($job->get()['status'] !== 'failed') {
+              $job->withData('status', 'failed')->save();
+              $recoveredCount++;
+            }  
+          }
       }
     }
 

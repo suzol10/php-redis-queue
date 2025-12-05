@@ -97,26 +97,25 @@ class Queue
 
     $status = $job->get('status');
     if ($status === 'success') {
-        $this->redis->incr($this->successful);
-        $this->redis->lpush($this->processed, $job->id());
+        $this->redis->lpush($this->successful, $job->id());
     } elseif ($status === 'failed') {
         $this->redis->lpush($this->failed, $job->id());
     }
 
-    return true;
+    return $this->redis->incr($this->processed);
   }
 
   public function getStats(): array
   {
       return [
-          'pending' => $this->redis->llen($this->pending),
-          'processing' => $this->redis->llen($this->processing),
-          'processed' => $this->redis->llen($this->processed),
-          'successful' => (int) $this->redis->get($this->successful) ?: 0,
-          'failed' => $this->redis->llen($this->failed),
+          'pending' => $this->redis->llen($this->pending) ?? 0,
+          'processing' => $this->redis->llen($this->processing) ?? 0,
+          'processed' => (int) $this->redis->get($this->processed) ?? 0,
+          'successful' => $this->redis->llen($this->successful) ?? 0,
+          'failed' => $this->redis->llen($this->failed) ?? 0,
           'config' => [
-              'max_workers' => $this->getConfigDataValue('max_workers') ?: 1,
-              'pending_threshold' => $this->getConfigDataValue('pending_threshold') ?: 5,
+              'max_workers' => $this->getConfigDataValue('max_workers') ?? 1,
+              'pending_threshold' => $this->getConfigDataValue('pending_threshold') ?? 5,
           ],
       ];
   }
@@ -129,6 +128,16 @@ class Queue
   public function getFailedJobs(int $limit = 50): array
   {
     return $this->redis->lrange($this->failed, 0, $limit - 1);
+  }
+
+  /**
+   * Get successful job IDs from the queue
+   * @param int $limit Maximum number of successful jobs to return
+   * @return array Array of successful job IDs
+   */
+  public function getSuccessfulJobs(int $limit = 50): array
+  {
+    return $this->redis->lrange($this->successful, 0, $limit - 1);
   }
 
   /**
