@@ -43,6 +43,13 @@ class JobManager extends BaseManager
     $length = $this->redis->llen($queue->pending);
     $newLength = $this->redis->$method($queue->pending, $job->id());
 
+    // set default config values if not set
+    foreach ($queue->configDefaults as $key => $value) {
+      if ($queue->getConfigDataValue($key) === null) {
+        $queue->setConfigDataValue($key, $value);
+      }
+    }
+
     return $newLength === ++$length;
   }
 

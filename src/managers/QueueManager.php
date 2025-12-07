@@ -10,6 +10,8 @@ class QueueManager extends BaseManager
 {
   const GLOBAL_WORKERS_LIMIT_KEY = 'php-redis-queue:global:workers_limit';
   const DEFAULT_GLOBAL_WORKERS_LIMIT = 10;
+  const MAX_JOBS = -1;
+
   /**
    * Redis key that holds the hash that keeps track
    * of active queues.
@@ -187,6 +189,39 @@ class QueueManager extends BaseManager
     }
   }
 
+  public function clearPendingJobsForQueue(string $queueName) : int
+  {
+    return $this->recoverCrashedJobs($queueName) ?? 0;
+  }
+
+  public function purgeQueue(string $queueName)
+  {
+    /** @var \PhpRedisQueue\models\Queue $queue */
+    $queue = $this->getQueue($queueName);
+
+    // set max workers to 0
+    $queue->setConfigDataValue(Queue::CONFIG_MAX_WORKERS, 0);
+
+    // Gather all job IDs from all lists
+    $pendingJobs = $this->redis->lrange($queue->pending, 0, self::MAX_JOBS);
+    $processingJobs = $this->redis->lrange($queue->processing, 0, self::MAX_JOBS);
+    $successfulJobs = $this->redis->lrange($queue->successful, 0, self::MAX_JOBS);
+    $failedJobs = $this->redis->lrange($queue->failed, 0, self::MAX_JOBS);
+    $allJobIds = array_unique(array_merge($pendingJobs, $processingJobs, $successfulJobs, $failedJobs));
+
+    // Delete all job data
+    foreach ($allJobIds as $jobId) {
+      $this->redis->del('php-redis-queue:jobs:' . $jobId);
+    }
+
+    $this->redis->del($queue->pending);
+    $this->redis->del($queue->processing);
+    $this->redis->del($queue->successful);
+    $this->redis->del($queue->failed);
+    $this->redis->del($queue->config . ':*');
+
+  }
+
   /**
    * Migrate existing queues to use the new failed jobs list format
    * @return void
@@ -233,17 +268,22 @@ class QueueManager extends BaseManager
   /**
    * Recover jobs that are stuck in processing queues from crashed workers.
    * This should only be called once during worker system initialization.
+   * @param string|null $queueName Optional queue name to recover jobs from
    * @return int Number of jobs recovered
    */
-  public function recoverCrashedJobs(): int
+  public function recoverCrashedJobs($queueName = null): int
   {
     // Get all queues with their stats
     $queues = $this->getList();
+    if ($queueName) {
+      $queues = [$queueName => $queues[$queueName]];
+    }
     $recoveredCount = 0;
 
     foreach ($queues as $queueName => $queueStats) {
       // Only process queues that have jobs stuck in processing
       if ($queueStats['processing'] > 0) {
+        /** @var \PhpRedisQueue\models\Queue $queue */
         $queue = $this->getQueue($queueName);
 
         // Move all jobs from processing back to pending
