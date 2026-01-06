@@ -333,11 +333,74 @@ class QueueManager extends BaseManager
             if ($job->get()['status'] !== 'failed') {
               $job->withData('status', 'failed')->save();
               $recoveredCount++;
-            }  
+            }
           }
       }
     }
 
     return $recoveredCount;
+  }
+
+  /**
+   * Clean up expired jobs from successful and failed lists
+   * Jobs are automatically expired by Redis after TTL, but their IDs remain in the lists
+   * This method removes job IDs that no longer have corresponding job data
+   * @param string|null $queueName Optional queue name to clean up (null for all queues)
+   * @return int Number of expired jobs removed
+   */
+  public function cleanupExpiredJobs($queueName = null): int
+  {
+    // Get all queues with their stats
+    $queues = $this->getList();
+    if ($queueName) {
+      $queues = [$queueName => $queues[$queueName] ?? null];
+      if (!$queues[$queueName]) {
+        return 0; // Queue doesn't exist
+      }
+    }
+
+    $cleanedCount = 0;
+
+    foreach ($queues as $queueName => $queueStats) {
+      /** @var \PhpRedisQueue\models\Queue $queue */
+      $queue = $this->getQueue($queueName);
+
+      // Clean up successful jobs
+      if ($queueStats['successful'] > 0) {
+        $cleanedCount += $this->cleanupExpiredJobsFromList($queue, 'successful');
+      }
+
+      // Clean up failed jobs
+      if ($queueStats['failed'] > 0) {
+        $cleanedCount += $this->cleanupExpiredJobsFromList($queue, 'failed');
+      }
+    }
+
+    return $cleanedCount;
+  }
+
+  /**
+   * Clean up expired jobs from a specific list (successful or failed)
+   * @param \PhpRedisQueue\models\Queue $queue The queue to clean up
+   * @param string $listName The list name ('successful' or 'failed')
+   * @return int Number of expired jobs removed
+   */
+  private function cleanupExpiredJobsFromList(\PhpRedisQueue\models\Queue $queue, string $listName): int
+  {
+    $cleanedCount = 0;
+    $listKey = $queue->$listName;
+    $jobIds = $this->redis->lrange($listKey, 0, -1);
+
+    foreach ($jobIds as $jobId) {
+      // Check if job data still exists
+      $jobKey = 'php-redis-queue:jobs:' . $jobId;
+      if (!$this->redis->exists($jobKey)) {
+        // Job data doesn't exist (expired), remove from list
+        $this->redis->lrem($listKey, 0, $jobId);
+        $cleanedCount++;
+      }
+    }
+
+    return $cleanedCount;
   }
 }
